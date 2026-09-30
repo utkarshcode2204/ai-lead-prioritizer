@@ -1,0 +1,39 @@
+.debrief { margin-top: 16px; border-color: #b2f2bb; background: #f6fff8; }
+.debrief h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #2b8a3e;
+}
+.debrief-hint { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+.debrief textarea {
+  width: 100%;
+  min-height: 90px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  resize: vertical;
+  background: #fff;
+}
+.debrief-actions { margin-top: 8px; display: flex; gap: 8px; }
+.debrief-history { margin-top: 14px; display: grid; gap: 10px; }
+.debrief-entry {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.debrief-change { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+.debrief-arrow { color: var(--muted); }
+.debrief-up { color: #2b8a3e; }
+.debrief-down { color: var(--hot); }
+.debrief-entry p { margin: 6px 0 0; line-height: 1.45; }
+.debrief-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-top: 8px;
+}
