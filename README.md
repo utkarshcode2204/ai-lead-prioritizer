@@ -2,7 +2,7 @@
 
 An AI-powered web app that helps a real-estate salesperson see which inbound leads matter, what each customer wants, and what to do next.
 
-- **Live app:** <your Vercel URL>
+- **Live app:** https://ai-lead-prioritizer.vercel.app
 - **Note:** the backend runs on a free plan, so the first load after a break can take up to a minute.
 
 ## What I built
