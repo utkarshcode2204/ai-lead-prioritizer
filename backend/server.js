@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
 import { GoogleGenAI } from "@google/genai";
+import { computeScore } from "./scoring.js";
 
 const app = express();
 app.use(cors());
@@ -78,16 +79,20 @@ async function generate(prompt, { json = false } = {}) {
   throw lastErr;
 }
 
-// The tag is derived from the score in our own code,
-// so the two can never disagree.
-function tagFromScore(score) {
-  if (score >= 70) return "Hot";
-  if (score >= 40) return "Warm";
-  return "Cold";
+// One short line explaining the score, built from the rubric.
+function reasonFromBreakdown(breakdown) {
+  return breakdown
+    .map((b) => {
+      const sign = b.points >= 0 ? "+" : "";
+      return `${b.label} ${String(b.value).replace("_", " ")} (${sign}${b.points})`;
+    })
+    .join(", ");
 }
 
+// The AI only extracts facts (signals). The score, the tag and the
+// breakdown are computed by our own code in scoring.js.
 function normalizeAnalysis(raw) {
-  const score = Math.max(0, Math.min(100, Math.round(Number(raw.score) || 0)));
+  const result = computeScore(raw.signals);
   return {
     summary: raw.summary || "",
     intent: raw.intent || "",
@@ -95,9 +100,11 @@ function normalizeAnalysis(raw) {
     objections: Array.isArray(raw.objections) ? raw.objections : [],
     nextAction: raw.nextAction || "",
     suggestedResponse: raw.suggestedResponse || "",
-    scoreReason: raw.scoreReason || "",
-    score,
-    tag: tagFromScore(score),
+    signals: result.signals,
+    breakdown: result.breakdown,
+    scoreReason: reasonFromBreakdown(result.breakdown),
+    score: result.score,
+    tag: result.tag,
   };
 }
 
@@ -112,18 +119,23 @@ Customer message: ${lead.message}`;
 
 const ANALYSIS_KEYS = `summary (string), intent (string), keyRequirements (array of strings),
 objections (array of strings), nextAction (string), suggestedResponse (string),
-score (number 0-100), scoreReason (string, one short sentence)`;
+signals (object, described below)`;
 
-const SCORE_RULES = `Scoring guide: 70-100 = Hot (clear need, budget, and a short timeline),
-40-69 = Warm (interested but vague, long timeline, or budget mismatch),
-0-39 = Cold (browsing, no budget, no timeline, or spam).`;
+const SIGNALS_SPEC = `The "signals" object must have exactly these keys. Do NOT give a score.
+- timeline: "immediate" (within 1 month), "short" (1-3 months), "medium" (3-6 months), "long" (more than 6 months), or "unknown"
+- budget: "specific" (a clear number or range), "vague" (mentioned but unclear), or "none"
+- requirement: "specific" (type, location and key needs are clear), "partial", or "vague"
+- engagement: "ready_to_act" (asks for a visit, price, availability or a next step), "interested" (positive but asks for no action), or "browsing" (just exploring)
+- objections: "none", "minor" (a question or small worry, such as price negotiation), or "major" (a deal-breaker, such as a budget far below the price)
+- needsApproval: true if someone else (spouse, family, partner, boss) must approve, otherwise false
+- isSpam: true only if the message is spam, a test, or not about buying property, otherwise false`;
 
 async function analyzeLead(lead) {
   const prompt = `You are an assistant for a real-estate salesperson in India.
-Analyze this lead and reply with JSON only, using exactly these keys:
+Read this lead and reply with JSON only, using exactly these keys:
 ${ANALYSIS_KEYS}
 
-${SCORE_RULES}
+${SIGNALS_SPEC}
 
 Lead:
 ${leadDetails(lead)}`;
@@ -211,7 +223,8 @@ app.delete("/api/leads/:id", async (req, res) => {
   }
 });
 
-// Run the AI analysis again (for leads saved while the AI was busy).
+// Run the AI analysis again (for leads saved while the AI was busy,
+// or saved before the rule-based scoring existed).
 app.post("/api/leads/:id/reanalyze", async (req, res) => {
   try {
     const lead = await findLead(req.params.id);
@@ -280,32 +293,51 @@ Assistant:`;
 });
 
 // Own feature: Post-Call Debrief.
-// The salesperson pastes call notes. The AI re-scores the lead,
-// explains what changed, and drafts a follow-up message.
+// The salesperson pastes call notes. The AI re-reads the lead with the new
+// facts, our rubric re-scores it, and the AI drafts a follow-up message.
 app.post("/api/leads/:id/debrief", async (req, res) => {
   try {
     const { notes } = req.body;
-    if (!notes) return res.status(400).json({ error: "Call notes are required" });
+    if (!notes || !notes.trim()) {
+      return res.status(400).json({ error: "Call notes are required" });
+    }
 
     const lead = await findLead(req.params.id);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
+    // The same notes pasted twice must not count as a second call.
+    const cleaned = notes.trim().toLowerCase();
+    const alreadyAdded = lead.debriefs.some(
+      (d) => (d.notes || "").trim().toLowerCase() === cleaned
+    );
+    if (alreadyAdded) {
+      return res.status(400).json({ error: "These call notes were already added to this lead" });
+    }
+
+    const previousNotes = lead.debriefs
+      .map((d, i) => `Call ${i + 1} notes: ${d.notes}`)
+      .join("\n");
+
     const prompt = `You are an assistant for a real-estate salesperson in India.
-The salesperson just spoke to this lead. Use the call notes to update the analysis.
+The salesperson just spoke to this lead. Update your reading of the lead using
+the new call notes. The newest call notes override older information.
 Reply with JSON only, using exactly these keys:
 ${ANALYSIS_KEYS},
-changeSummary (string, one or two sentences on what changed and why the score moved),
+changeSummary (string, one or two sentences on what changed in the facts about the lead. Do not mention any numeric score),
 followUpMessage (string, a short message to send to the customer after the call)
 
-${SCORE_RULES}
+${SIGNALS_SPEC}
 
 LEAD DETAILS:
 ${leadDetails(lead)}
 
+EARLIER CALL NOTES:
+${previousNotes || "None"}
+
 PREVIOUS ANALYSIS:
 ${JSON.stringify(lead.analysis)}
 
-CALL NOTES:
+NEW CALL NOTES:
 ${notes}`;
 
     const text = await generate(prompt, { json: true });
