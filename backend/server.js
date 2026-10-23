@@ -4,6 +4,12 @@ import cors from "cors";
 import mongoose from "mongoose";
 import { GoogleGenAI } from "@google/genai";
 import { computeScore } from "./scoring.js";
+import { authRouter, requireAuth } from "./auth.js";
+
+if (!process.env.JWT_SECRET) {
+  console.error("JWT_SECRET is missing in .env, refusing to start.");
+  process.exit(1);
+}
 
 const app = express();
 app.use(cors());
@@ -18,6 +24,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const leadSchema = new mongoose.Schema(
   {
+    owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
     name: String,
     location: String,
     requirement: String,
@@ -84,7 +91,7 @@ function reasonFromBreakdown(breakdown) {
   return breakdown
     .map((b) => {
       const sign = b.points >= 0 ? "+" : "";
-      return `${b.label} ${String(b.value).replace("_", " ")} (${sign}${b.points})`;
+      return `${b.label} ${b.value} (${sign}${b.points})`;
     })
     .join(", ");
 }
@@ -154,9 +161,10 @@ function sendError(res, err) {
   });
 }
 
-async function findLead(id) {
+// A user can only ever load their own leads.
+async function findLead(id, userId) {
   if (!mongoose.isValidObjectId(id)) return null;
-  return Lead.findById(id);
+  return Lead.findOne({ _id: id, owner: userId });
 }
 
 /* ---------- Routes ---------- */
@@ -165,16 +173,26 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
+app.use("/api/auth", authRouter);
+
 // Create a lead, analyze it with AI, save it.
 // If the AI is unavailable the lead is still saved, and can be re-analyzed later.
-app.post("/api/leads", async (req, res) => {
+app.post("/api/leads", requireAuth, async (req, res) => {
   try {
     const { name, location, requirement, budget, timeline, message } = req.body;
     if (!name || !message) {
       return res.status(400).json({ error: "Name and customer message are required" });
     }
 
-    const lead = new Lead({ name, location, requirement, budget, timeline, message });
+    const lead = new Lead({
+      owner: req.userId,
+      name,
+      location,
+      requirement,
+      budget,
+      timeline,
+      message,
+    });
 
     try {
       const analysis = await analyzeLead(lead);
@@ -192,19 +210,19 @@ app.post("/api/leads", async (req, res) => {
   }
 });
 
-// List all leads, highest score first.
-app.get("/api/leads", async (req, res) => {
+// List the logged-in user's leads, highest score first.
+app.get("/api/leads", requireAuth, async (req, res) => {
   try {
-    const leads = await Lead.find().sort({ score: -1, createdAt: -1 });
+    const leads = await Lead.find({ owner: req.userId }).sort({ score: -1, createdAt: -1 });
     res.json(leads);
   } catch (err) {
     sendError(res, err);
   }
 });
 
-app.get("/api/leads/:id", async (req, res) => {
+app.get("/api/leads/:id", requireAuth, async (req, res) => {
   try {
-    const lead = await findLead(req.params.id);
+    const lead = await findLead(req.params.id, req.userId);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
     res.json(lead);
   } catch (err) {
@@ -212,9 +230,9 @@ app.get("/api/leads/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/leads/:id", async (req, res) => {
+app.delete("/api/leads/:id", requireAuth, async (req, res) => {
   try {
-    const lead = await findLead(req.params.id);
+    const lead = await findLead(req.params.id, req.userId);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
     await lead.deleteOne();
     res.json({ deleted: true });
@@ -225,9 +243,9 @@ app.delete("/api/leads/:id", async (req, res) => {
 
 // Run the AI analysis again (for leads saved while the AI was busy,
 // or saved before the rule-based scoring existed).
-app.post("/api/leads/:id/reanalyze", async (req, res) => {
+app.post("/api/leads/:id/reanalyze", requireAuth, async (req, res) => {
   try {
-    const lead = await findLead(req.params.id);
+    const lead = await findLead(req.params.id, req.userId);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     const analysis = await analyzeLead(lead);
@@ -242,12 +260,12 @@ app.post("/api/leads/:id/reanalyze", async (req, res) => {
 });
 
 // Conversational interface: answers are grounded in this lead's data.
-app.post("/api/leads/:id/chat", async (req, res) => {
+app.post("/api/leads/:id/chat", requireAuth, async (req, res) => {
   try {
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: "Message is required" });
 
-    const lead = await findLead(req.params.id);
+    const lead = await findLead(req.params.id, req.userId);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     const history = lead.chat
@@ -295,14 +313,14 @@ Assistant:`;
 // Own feature: Post-Call Debrief.
 // The salesperson pastes call notes. The AI re-reads the lead with the new
 // facts, our rubric re-scores it, and the AI drafts a follow-up message.
-app.post("/api/leads/:id/debrief", async (req, res) => {
+app.post("/api/leads/:id/debrief", requireAuth, async (req, res) => {
   try {
     const { notes } = req.body;
     if (!notes || !notes.trim()) {
       return res.status(400).json({ error: "Call notes are required" });
     }
 
-    const lead = await findLead(req.params.id);
+    const lead = await findLead(req.params.id, req.userId);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     // The same notes pasted twice must not count as a second call.
