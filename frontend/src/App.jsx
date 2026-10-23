@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { getLeads, createLead, deleteLead } from "./api.js";
+import {
+  getLeads,
+  createLead,
+  deleteLead,
+  getMe,
+  getToken,
+  clearToken,
+  setUnauthorizedHandler,
+} from "./api.js";
 import LeadDetail, { TagPill } from "./LeadDetail.jsx";
+import AuthScreen from "./AuthScreen.jsx";
 
 const EMPTY = {
   name: "",
@@ -33,6 +42,8 @@ const SAMPLE = {
 const FILTERS = ["All", "Hot", "Warm", "Cold"];
 
 export default function App() {
+  const [user, setUser] = useState(null);
+  const [checking, setChecking] = useState(Boolean(getToken()));
   const [leads, setLeads] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [filter, setFilter] = useState("All");
@@ -42,15 +53,47 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  function resetSession() {
+    setUser(null);
+    setLeads([]);
+    setSelectedId(null);
+    setFilter("All");
+    setShowForm(false);
+    setError("");
+    setLoading(true);
+  }
+
+  function logout() {
+    clearToken();
+    resetSession();
+  }
+
+  // If the login expires while using the app, go back to the login screen.
   useEffect(() => {
+    setUnauthorizedHandler(resetSession);
+  }, []);
+
+  // On page load, check whether a saved login is still valid.
+  useEffect(() => {
+    if (!getToken()) return;
+    getMe()
+      .then((data) => setUser(data.user))
+      .catch(() => clearToken())
+      .finally(() => setChecking(false));
+  }, []);
+
+  // Load this user's leads after login.
+  useEffect(() => {
+    if (!user) return;
+    setLoading(true);
     getLeads()
       .then((data) => {
         setLeads(data);
-        if (data.length) setSelectedId(data[0]._id);
+        setSelectedId(data.length ? data[0]._id : null);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [user]);
 
   // Highest score first, always.
   const sorted = useMemo(
@@ -65,6 +108,9 @@ export default function App() {
     });
     return c;
   }, [leads]);
+
+  if (checking) return <div className="empty">Loading...</div>;
+  if (!user) return <AuthScreen onAuth={setUser} />;
 
   const visible = filter === "All" ? sorted : sorted.filter((l) => l.tag === filter);
   const selected = leads.find((l) => l._id === selectedId) || null;
@@ -111,7 +157,12 @@ export default function App() {
     <>
       <header className="app-header">
         <h1>Lead Prioritizer</h1>
-        <span>AI-ranked real-estate leads</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {user.name}
+          <button className="btn btn-small" onClick={logout}>
+            Log out
+          </button>
+        </span>
       </header>
 
       <div className="layout">
