@@ -10,6 +10,7 @@ import {
 } from "./api.js";
 import LeadDetail, { TagPill } from "./LeadDetail.jsx";
 import AuthScreen from "./AuthScreen.jsx";
+import QueuePanel from "./QueuePanel.jsx";
 
 const EMPTY = {
   name: "",
@@ -109,11 +110,26 @@ export default function App() {
     return c;
   }, [leads]);
 
+  // Changes whenever a lead is added, deleted, re-scored or gets a new call,
+  // so the queue panel knows when to reload.
+  const queueKey = useMemo(
+    () =>
+      leads
+        .map((l) => `${l._id}:${l.score}:${(l.debriefs || []).length}`)
+        .join("|"),
+    [leads]
+  );
+
   if (checking) return <div className="empty">Loading...</div>;
   if (!user) return <AuthScreen onAuth={setUser} />;
 
   const visible = filter === "All" ? sorted : sorted.filter((l) => l.tag === filter);
   const selected = leads.find((l) => l._id === selectedId) || null;
+
+  function openLead(id) {
+    setFilter("All");
+    setSelectedId(id);
+  }
 
   function setField(key, value) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -247,6 +263,8 @@ export default function App() {
               </div>
             </form>
           )}
+
+          <QueuePanel refreshKey={queueKey} onSelect={openLead} />
 
           <div className="filters">
             {FILTERS.map((f) => (

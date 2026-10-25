@@ -78,6 +78,8 @@ export const getMe = () => request("/auth/me");
 
 export const getLeads = () => request("/leads");
 
+export const getQueue = () => request("/queue");
+
 export const createLead = (lead) =>
   request("/leads", { method: "POST", body: JSON.stringify(lead) });
 

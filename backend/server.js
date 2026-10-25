@@ -5,6 +5,7 @@ import mongoose from "mongoose";
 import { GoogleGenAI } from "@google/genai";
 import { computeScore } from "./scoring.js";
 import { authRouter, requireAuth } from "./auth.js";
+import { buildQueue } from "./queue.js";
 
 if (!process.env.JWT_SECRET) {
   console.error("JWT_SECRET is missing in .env, refusing to start.");
@@ -174,6 +175,16 @@ app.get("/api/health", (req, res) => {
 });
 
 app.use("/api/auth", authRouter);
+
+// Today's action queue: which leads need attention first.
+app.get("/api/queue", requireAuth, async (req, res) => {
+  try {
+    const leads = await Lead.find({ owner: req.userId }).lean();
+    res.json(buildQueue(leads));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
 
 // Create a lead, analyze it with AI, save it.
 // If the AI is unavailable the lead is still saved, and can be re-analyzed later.
